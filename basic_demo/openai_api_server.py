@@ -22,8 +22,14 @@ EventSourceResponse.DEFAULT_PING_INTERVAL = 1000
 import os
 
 MODEL_PATH = os.environ.get('MODEL_PATH', '/root/autodl-fs/glm-4-9b-chat/')
-LORA_PATH = os.environ.get('LORA_PATH' , '/root/autodl-tmp/glm4-lora/huanhuan')
-MAX_MODEL_LENGTH = 8192
+LORA_MODELS = { 
+    'huanhuan': { 
+        'id': 1, 
+        'path': '/root/autodl-tmp/glm4-lora/huanhuan',
+    },
+}
+MAX_MODEL_LENGTH = 32768
+MAX_COMPETION_TOKENS = 16384
 
 
 @asynccontextmanager
@@ -200,7 +206,7 @@ async def generate_stream_glm4(params):
     temperature = float(params.get("temperature", 1.0))
     repetition_penalty = float(params.get("repetition_penalty", 1.0))
     top_p = float(params.get("top_p", 1.0))
-    max_new_tokens = int(params.get("max_tokens", 8192))
+    max_new_tokens = int(params.get("max_tokens", MAX_COMPETION_TOKENS))
 
     messages = process_messages(messages, tools=tools, tool_choice=tool_choice)
     inputs = tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
@@ -224,13 +230,13 @@ async def generate_stream_glm4(params):
         "skip_special_tokens": True,
     }
     sampling_params = SamplingParams(**params_dict)
-    # TODO 细化代码
     lora_request = None    
-    if model == "lora" and LORA_PATH:
+    if model in LORA_MODELS:
+        model_obj = LORA_MODELS[model]
         lora_request = LoRARequest(
-            lora_name="lora",
-            lora_int_id=1,
-            lora_local_path=LORA_PATH,
+            lora_name=model,
+            lora_int_id=model_obj['id'],
+            lora_local_path=model_obj['path'],
         )
     
     async for output in engine.generate(inputs=inputs, sampling_params=sampling_params, request_id=f"{time.time()}", lora_request=lora_request):
@@ -353,9 +359,8 @@ async def health() -> Response:
 async def list_models():
     model_card = ModelCard(id="glm-4")
     data = [model_card]
-    # TODO 细化代码
-    if LORA_PATH:
-        data.append(ModelCard(id="lora"))
+    for name in LORA_MODELS:
+        data.append(ModelCard(id=name, parent="glm-4"))
     return ModelList(data=data)
 
 
@@ -369,7 +374,7 @@ async def create_chat_completion(request: ChatCompletionRequest):
         messages=request.messages,
         temperature=request.temperature,
         top_p=request.top_p,
-        max_tokens=request.max_tokens or 1024,
+        max_tokens=request.max_tokens or MAX_COMPETION_TOKENS,
         echo=False,
         stream=request.stream,
         repetition_penalty=request.repetition_penalty,
