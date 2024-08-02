@@ -27,9 +27,15 @@ LORA_MODELS = {
         'id': 1, 
         'path': '/root/autodl-tmp/glm4-lora/huanhuan',
     },
+    'wanzi': { 
+        'id': 2, 
+        'path': '/root/autodl-tmp/glm4-lora/wanzi',
+    },
 }
+ENABLE_LORA=False
 MAX_MODEL_LENGTH = 32768
 MAX_COMPETION_TOKENS = 16384
+CARD_NUMBER = 2
 
 
 @asynccontextmanager
@@ -231,7 +237,7 @@ async def generate_stream_glm4(params):
     }
     sampling_params = SamplingParams(**params_dict)
     lora_request = None    
-    if model in LORA_MODELS:
+    if ENABLE_LORA and model in LORA_MODELS:
         model_obj = LORA_MODELS[model]
         lora_request = LoRARequest(
             lora_name=model,
@@ -359,8 +365,9 @@ async def health() -> Response:
 async def list_models():
     model_card = ModelCard(id="glm-4")
     data = [model_card]
-    for name in LORA_MODELS:
-        data.append(ModelCard(id=name, parent="glm-4"))
+    if ENABLE_LORA:
+        for name in LORA_MODELS:
+            data.append(ModelCard(id=name, parent="glm-4"))
     return ModelList(data=data)
 
 
@@ -690,7 +697,7 @@ if __name__ == "__main__":
         model=MODEL_PATH,
         tokenizer=MODEL_PATH,
         # 如果你有多张显卡，可以在这里设置成你的显卡数量
-        tensor_parallel_size=1,
+        tensor_parallel_size=CARD_NUMBER,
         dtype="bfloat16",
         trust_remote_code=True,
         # 占用显存的比例，请根据你的显卡显存大小设置合适的值，例如，如果你的显卡有80G，您只想使用24G，请按照24/80=0.3设置
@@ -702,7 +709,7 @@ if __name__ == "__main__":
         max_model_len=MAX_MODEL_LENGTH,
 
         # TODO lora 相关配置
-        enable_lora=True,
+        enable_lora=ENABLE_LORA,
     )
     engine = AsyncLLMEngine.from_engine_args(engine_args)
     uvicorn.run(app, host='0.0.0.0', port=8000, workers=1)
