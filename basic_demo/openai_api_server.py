@@ -9,6 +9,7 @@ import random
 import string
 
 from vllm import SamplingParams, AsyncEngineArgs, AsyncLLMEngine
+from vllm.lora.request import LoRARequest
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
@@ -20,8 +21,21 @@ from sse_starlette.sse import EventSourceResponse
 EventSourceResponse.DEFAULT_PING_INTERVAL = 1000
 import os
 
-MODEL_PATH = os.environ.get('MODEL_PATH', 'THUDM/glm-4-9b-chat')
-MAX_MODEL_LENGTH = 8192
+MODEL_PATH = os.environ.get('MODEL_PATH', '/root/autodl-fs/glm-4-9b-chat/')
+LORA_MODELS = { 
+    'huanhuan': { 
+        'id': 1, 
+        'path': '/root/autodl-tmp/glm4-lora/huanhuan',
+    },
+    'wanzi': { 
+        'id': 2, 
+        'path': '/root/autodl-tmp/glm4-lora/wanzi',
+    },
+}
+ENABLE_LORA=False
+MAX_MODEL_LENGTH = 32768
+MAX_COMPETION_TOKENS = 16384
+CARD_NUMBER = 2
 
 
 @asynccontextmanager
@@ -191,13 +205,14 @@ def process_response(output: str, tools: dict | List[dict] = None, use_tool: boo
 
 @torch.inference_mode()
 async def generate_stream_glm4(params):
+    model = params["model"]
     messages = params["messages"]
     tools = params["tools"]
     tool_choice = params["tool_choice"]
     temperature = float(params.get("temperature", 1.0))
     repetition_penalty = float(params.get("repetition_penalty", 1.0))
     top_p = float(params.get("top_p", 1.0))
-    max_new_tokens = int(params.get("max_tokens", 8192))
+    max_new_tokens = int(params.get("max_tokens", MAX_COMPETION_TOKENS))
 
     messages = process_messages(messages, tools=tools, tool_choice=tool_choice)
     inputs = tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
@@ -221,7 +236,16 @@ async def generate_stream_glm4(params):
         "skip_special_tokens": True,
     }
     sampling_params = SamplingParams(**params_dict)
-    async for output in engine.generate(inputs=inputs, sampling_params=sampling_params, request_id=f"{time.time()}"):
+    lora_request = None    
+    if ENABLE_LORA and model in LORA_MODELS:
+        model_obj = LORA_MODELS[model]
+        lora_request = LoRARequest(
+            lora_name=model,
+            lora_int_id=model_obj['id'],
+            lora_local_path=model_obj['path'],
+        )
+    
+    async for output in engine.generate(inputs=inputs, sampling_params=sampling_params, request_id=f"{time.time()}", lora_request=lora_request):
         output_len = len(output.outputs[0].token_ids)
         input_len = len(output.prompt_token_ids)
         ret = {
@@ -340,7 +364,11 @@ async def health() -> Response:
 @app.get("/v1/models", response_model=ModelList)
 async def list_models():
     model_card = ModelCard(id="glm-4")
-    return ModelList(data=[model_card])
+    data = [model_card]
+    if ENABLE_LORA:
+        for name in LORA_MODELS:
+            data.append(ModelCard(id=name, parent="glm-4"))
+    return ModelList(data=data)
 
 
 @app.post("/v1/chat/completions", response_model=ChatCompletionResponse)
@@ -349,10 +377,11 @@ async def create_chat_completion(request: ChatCompletionRequest):
         raise HTTPException(status_code=400, detail="Invalid request")
 
     gen_params = dict(
+        model=request.model,
         messages=request.messages,
         temperature=request.temperature,
         top_p=request.top_p,
-        max_tokens=request.max_tokens or 1024,
+        max_tokens=request.max_tokens or MAX_COMPETION_TOKENS,
         echo=False,
         stream=request.stream,
         repetition_penalty=request.repetition_penalty,
@@ -362,7 +391,7 @@ async def create_chat_completion(request: ChatCompletionRequest):
     logger.debug(f"==== request ====\n{gen_params}")
 
     if request.stream:
-        predict_stream_generator = predict_stream(request.model, gen_params)
+        predict_stream_generator = predict_stream(gen_params)
         output = await anext(predict_stream_generator)
         if output:
             return EventSourceResponse(predict_stream_generator, media_type="text/event-stream")
@@ -437,7 +466,8 @@ async def create_chat_completion(request: ChatCompletionRequest):
     )
 
 
-async def predict_stream(model_id, gen_params):
+async def predict_stream(gen_params):
+    model_id = gen_params['model']
     output = ""
     is_function_call = False
     has_send_first_chunk = False
@@ -667,7 +697,7 @@ if __name__ == "__main__":
         model=MODEL_PATH,
         tokenizer=MODEL_PATH,
         # 如果你有多张显卡，可以在这里设置成你的显卡数量
-        tensor_parallel_size=1,
+        tensor_parallel_size=CARD_NUMBER,
         dtype="bfloat16",
         trust_remote_code=True,
         # 占用显存的比例，请根据你的显卡显存大小设置合适的值，例如，如果你的显卡有80G，您只想使用24G，请按照24/80=0.3设置
@@ -677,6 +707,9 @@ if __name__ == "__main__":
         engine_use_ray=False,
         disable_log_requests=True,
         max_model_len=MAX_MODEL_LENGTH,
+
+        # TODO lora 相关配置
+        enable_lora=ENABLE_LORA,
     )
     engine = AsyncLLMEngine.from_engine_args(engine_args)
     uvicorn.run(app, host='0.0.0.0', port=8000, workers=1)
