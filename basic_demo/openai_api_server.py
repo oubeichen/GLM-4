@@ -21,7 +21,7 @@ EventSourceResponse.DEFAULT_PING_INTERVAL = 1000
 import os
 
 MODEL_PATH = os.environ.get('MODEL_PATH', 'THUDM/glm-4-9b-chat')
-MAX_MODEL_LENGTH = 8192
+MAX_MODEL_LENGTH = 32000
 
 
 @asynccontextmanager
@@ -352,7 +352,7 @@ async def create_chat_completion(request: ChatCompletionRequest):
         messages=request.messages,
         temperature=request.temperature,
         top_p=request.top_p,
-        max_tokens=request.max_tokens or 1024,
+        max_tokens=request.max_tokens or 16000,
         echo=False,
         stream=request.stream,
         repetition_penalty=request.repetition_penalty,
@@ -667,11 +667,11 @@ if __name__ == "__main__":
         model=MODEL_PATH,
         tokenizer=MODEL_PATH,
         # 如果你有多张显卡，可以在这里设置成你的显卡数量
-        tensor_parallel_size=1,
+        tensor_parallel_size=2,
         dtype="bfloat16",
         trust_remote_code=True,
         # 占用显存的比例，请根据你的显卡显存大小设置合适的值，例如，如果你的显卡有80G，您只想使用24G，请按照24/80=0.3设置
-        gpu_memory_utilization=0.9,
+        gpu_memory_utilization=0.95,
         enforce_eager=True,
         worker_use_ray=False,
         engine_use_ray=False,
